@@ -1,6 +1,9 @@
 ﻿{
   "dependencies": {
-    "Microsoft.NETCore.UniversalWindowsPlatform": "5.1.0"
+    "Google.Apis.Drive.v3": "1.17.0.644",
+    "Microsoft.Bcl.Async": "1.0.168",
+    "Microsoft.NETCore.UniversalWindowsPlatform": "5.2.2",
+    "Zlib.Portable": "1.11.0"
   },
   "frameworks": {
     "uap10.0": {}
