@@ -241,56 +241,46 @@ namespace BuildBackup
 
         public static async Task<HttpWebRequest> CreateUploadRequest(DriveService driveService, System.IO.FileStream contentStream, string title, string mimeType, string description = null)
         {
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
+            string json = "{\"name\":\"" + title + "\"}";
+            HttpWebRequest httpRequest = null;
 
-            request.Method = "POST";
-
-            Dictionary<string, object> requestBody = new Dictionary<string, object>();
-            requestBody["title"] = title;
-            requestBody["mimeType"] = mimeType;
-
-            if (!string.IsNullOrWhiteSpace(description))
+            try
             {
-                requestBody["description"] = description;
+                httpRequest = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
+                httpRequest.Headers["Content-Type"] = "application /json; charset=UTF-8";
+                httpRequest.Headers["Content-Length"] = json.Length.ToString();
+                httpRequest.Headers["X-Upload-Content-Type"] = mimeType;
+                httpRequest.Headers["X-Upload-Content-Length"] = contentStream.Length.ToString();
+                httpRequest.Headers["Authorization"] = "Bearer " + ((UserCredential)driveService.HttpClientInitializer).Token.AccessToken;
+                httpRequest.Method = "POST";
+
+                System.IO.Stream requestStream = await httpRequest.GetRequestStreamAsync();
+                using (var streamWriter = new System.IO.StreamWriter(requestStream))
+                {                    
+                    Debug.WriteLine(json);
+                    streamWriter.Write(json);
+                }
+
+                HttpWebResponse httpResponse = (HttpWebResponse)(await httpRequest.GetResponseAsync());
+                if (httpResponse.StatusCode == HttpStatusCode.OK)
+                {
+                    httpRequest = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=" + httpResponse.Headers["x-guploader-uploadid"]);
+                    httpRequest.Headers["Content-Type"] = mimeType;
+                    httpRequest.Headers["Content-Length"] = contentStream.Length.ToString();                    
+                    httpRequest.Method = "PUT";
+
+                    requestStream = await httpRequest.GetRequestStreamAsync();
+                    await contentStream.CopyToAsync(requestStream);
+                    httpResponse = (HttpWebResponse)(await httpRequest.GetResponseAsync());
+
+                }                
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
             }
 
-            //driveService.Authenticator.ApplyAuthenticationToRequest(request);
-
-
-            System.IO.Stream requestStream = await request.GetRequestStreamAsync();
-
-            ////How to do that???
-            //string formdataTemplate = "Content-Disposition: form-data; name=\"{0}\"\r\n\r\n{1}";
-            //foreach (string key in nvc.Keys)
-            //{
-            //    rs.Write(boundarybytes, 0, boundarybytes.Length);
-            //    string formitem = string.Format(formdataTemplate, key, nvc[key]);
-            //    byte[] formitembytes = System.Text.Encoding.UTF8.GetBytes(formitem);
-            //    rs.Write(formitembytes, 0, formitembytes.Length);
-            //}
-            //rs.Write(boundarybytes, 0, boundarybytes.Length);
-
-            //string headerTemplate = "Content-Disposition: form-data; name=\"{0}\"; filename=\"{1}\"\r\nContent-Type: {2}\r\n\r\n";
-            //string header = string.Format(headerTemplate, paramName, file, contentType);
-            //byte[] headerbytes = System.Text.Encoding.UTF8.GetBytes(header);
-            //rs.Write(headerbytes, 0, headerbytes.Length);
-
-            //FileStream fileStream = new FileStream(file, FileMode.Open, FileAccess.Read);
-            //byte[] buffer = new byte[4096];
-            //int bytesRead = 0;
-            //while ((bytesRead = fileStream.Read(buffer, 0, buffer.Length)) != 0)
-            //{
-            //    rs.Write(buffer, 0, bytesRead);
-            //}
-            //fileStream.Close();
-
-            //byte[] trailer = System.Text.Encoding.ASCII.GetBytes("\r\n--" + boundary + "--\r\n");
-            //rs.Write(trailer, 0, trailer.Length);
-            //rs.Close();
-
-            //requestStream.Close();
-
-            return request;
+            return httpRequest;
         }
 
         public static async Task CopyFolderAsync(StorageFolder source, StorageFolder destinationContainer, string desiredName = null)
