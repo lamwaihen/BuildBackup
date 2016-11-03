@@ -16,6 +16,7 @@ using System.Threading.Tasks;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
 using Windows.Storage;
+using Windows.Storage.FileProperties;
 using Windows.Storage.Pickers;
 using Windows.System.Threading;
 using Windows.UI.Xaml;
@@ -128,23 +129,9 @@ namespace BuildBackup
                             StorageFile tempFile = await StorageFile.GetFileFromPathAsync(ApplicationData.Current.TemporaryFolder.Path + "\\" + item.Name + ".zip");
 
                             // Upload to Google Drive
-                            File fileMetadata = new File
-                            {
-                                Name = tempFile.Name,
-                                MimeType = tempFile.ContentType,
-                                Parents = new List<string> { googleFolderId }
-                            };
-                            FilesResource.CreateMediaUpload requestUpload;
+                            File uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
 
-                            using (System.IO.FileStream stream = new System.IO.FileStream(tempFile.Path, System.IO.FileMode.Open))
-                            {
-                                requestUpload = googleDrive.Files.Create(fileMetadata, stream, tempFile.ContentType);
-                                requestUpload.Fields = "id";
-                                requestUpload.ProgressChanged += videosInsertRequest_ProgressChanged;
-                                requestUpload.ResponseReceived += videosInsertRequest_ResponseReceived;
-                                await requestUpload.UploadAsync();
-                                File uploadedFile = requestUpload.ResponseBody;
-                            }
+                            // Delete temp file and folder
                             await tempFolder.DeleteAsync(StorageDeleteOption.PermanentDelete);
                             await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                         }
@@ -189,27 +176,8 @@ namespace BuildBackup
                     {
                         // Not exist, upload to Google Drive
                         StorageFile tempFile = await (item as StorageFile).CopyAsync(ApplicationData.Current.TemporaryFolder, item.Name, NameCollisionOption.ReplaceExisting);
-
-                        File fileMetadata = new File();
-                        fileMetadata.Name = tempFile.Name;
-                        fileMetadata.MimeType = tempFile.ContentType;
-                        fileMetadata.CreatedTime = item.DateCreated.DateTime;
-                        fileMetadata.Parents = new List<string> { googleFolderId };
-                        FilesResource.CreateMediaUpload requestUpload;
-
+                        File uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
                         
-                        
-                        using (System.IO.FileStream stream = new System.IO.FileStream(tempFile.Path, System.IO.FileMode.Open))
-                        {
-                            await CreateUploadRequest(googleDrive, stream, tempFile.Name, tempFile.ContentType);
-                            requestUpload = googleDrive.Files.Create(fileMetadata, stream, tempFile.ContentType);
-                            requestUpload.Fields = "id";
-                            requestUpload.ProgressChanged += videosInsertRequest_ProgressChanged;
-                            requestUpload.ResponseReceived += videosInsertRequest_ResponseReceived;
-                            requestUpload.ChunkSize = 256 * 1024;  //default size is 10 I think
-                            await requestUpload.UploadAsync();
-                            File uploadedFile = requestUpload.ResponseBody;
-                        }
                     }
 
                     // If build is too old, delete it.
@@ -218,69 +186,79 @@ namespace BuildBackup
             }
         }
 
-        static void videosInsertRequest_ProgressChanged(IUploadProgress progress)
+        public static async Task<File> UploadAsync(DriveService driveService, IList<string> parents, StorageFile file)
         {
-            switch (progress.Status)
+            // Prepare the JSON metadata
+            string json = "{\"name\":\"" + file.Name + "\"";
+            if (parents.Count > 0)
             {
-                case UploadStatus.Uploading:
-                    
-                    break;
-
-                case UploadStatus.Failed:
-                    // log_writeline("An error prevented the upload from completing.\n" + progress.Exception.ToString());
-                    break;
+                json += ", \"parents\": [";
+                foreach (string parent in parents)
+                {
+                    json += "\"" + parent + "\", ";
+                }
+                json = json.Remove(json.Length - 2) + "]";
             }
+            json += "}";
+            Debug.WriteLine(json);
 
-            Debug.WriteLine("{0}: {1} bytes sent.", progress.Status.ToString(), progress.BytesSent);
-        }
-
-        static void videosInsertRequest_ResponseReceived(File video)
-        {
-            // log_writeline("Video " + video.Snippet.Title + " was successfully uploaded.");
-        }
-
-        public static async Task<HttpWebRequest> CreateUploadRequest(DriveService driveService, System.IO.FileStream contentStream, string title, string mimeType, string description = null)
-        {
-            string json = "{\"name\":\"" + title + "\"}";
-            HttpWebRequest httpRequest = null;
-
+            File uploadedFile = null;
             try
             {
-                httpRequest = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
+                BasicProperties prop = await file.GetBasicPropertiesAsync();
+                ulong fileSize = prop.Size;
+                
+                // Step 1: Start a resumable session
+                HttpWebRequest httpRequest = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
                 httpRequest.Headers["Content-Type"] = "application /json; charset=UTF-8";
                 httpRequest.Headers["Content-Length"] = json.Length.ToString();
-                httpRequest.Headers["X-Upload-Content-Type"] = mimeType;
-                httpRequest.Headers["X-Upload-Content-Length"] = contentStream.Length.ToString();
+                httpRequest.Headers["X-Upload-Content-Type"] = file.ContentType;
+                httpRequest.Headers["X-Upload-Content-Length"] = fileSize.ToString();
                 httpRequest.Headers["Authorization"] = "Bearer " + ((UserCredential)driveService.HttpClientInitializer).Token.AccessToken;
                 httpRequest.Method = "POST";
 
-                System.IO.Stream requestStream = await httpRequest.GetRequestStreamAsync();
-                using (var streamWriter = new System.IO.StreamWriter(requestStream))
-                {                    
-                    Debug.WriteLine(json);
+                using (System.IO.Stream requestStream = await httpRequest.GetRequestStreamAsync())
+                using (System.IO.StreamWriter streamWriter = new System.IO.StreamWriter(requestStream))
+                {
                     streamWriter.Write(json);
                 }
 
+                // Step 2: Save the resumable session URI
                 HttpWebResponse httpResponse = (HttpWebResponse)(await httpRequest.GetResponseAsync());
-                if (httpResponse.StatusCode == HttpStatusCode.OK)
+                if (httpResponse.StatusCode != HttpStatusCode.OK)
+                    return null;
+
+                // Step 3: Upload the file
+                httpRequest = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=" + httpResponse.Headers["x-guploader-uploadid"]);
+                httpRequest.Headers["Content-Type"] = file.ContentType;
+                httpRequest.Headers["Content-Length"] = fileSize.ToString();
+                httpRequest.Method = "PUT";
+
+                using (System.IO.Stream requestStream = await httpRequest.GetRequestStreamAsync())
+                using (System.IO.FileStream fileStream = new System.IO.FileStream(file.Path, System.IO.FileMode.Open))
                 {
-                    httpRequest = (HttpWebRequest)WebRequest.Create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=" + httpResponse.Headers["x-guploader-uploadid"]);
-                    httpRequest.Headers["Content-Type"] = mimeType;
-                    httpRequest.Headers["Content-Length"] = contentStream.Length.ToString();                    
-                    httpRequest.Method = "PUT";
+                    await fileStream.CopyToAsync(requestStream);
+                }
 
-                    requestStream = await httpRequest.GetRequestStreamAsync();
-                    await contentStream.CopyToAsync(requestStream);
-                    httpResponse = (HttpWebResponse)(await httpRequest.GetResponseAsync());
+                httpResponse = (HttpWebResponse)(await httpRequest.GetResponseAsync());
+                if (httpResponse.StatusCode != HttpStatusCode.OK)
+                    return null;
 
-                }                
+                // Try to retrieve the file from Google
+                FilesResource.ListRequest request = driveService.Files.List();
+                if (parents.Count > 0)
+                    request.Q += "'" + parents[0] + "' in parents and ";
+                request.Q += "name = '" + file.Name + "'";
+                FileList result = request.Execute();
+                if (result.Files.Count > 0)
+                    uploadedFile = result.Files[0];
             }
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
             }
 
-            return httpRequest;
+            return uploadedFile;
         }
 
         public static async Task CopyFolderAsync(StorageFolder source, StorageFolder destinationContainer, string desiredName = null)
