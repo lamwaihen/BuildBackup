@@ -142,11 +142,8 @@ namespace BuildBackup
                     else
                     {
                         // Check if folder exist in Google Drive
-                        FilesResource.ListRequest request = googleDrive.Files.List();
-                        request.Q = "'" + googleFolderId + "' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '" + item.Name + "'";
-                        FileList result = request.Execute();
-                        File matchingGoogleFolder = null;
-                        if (result.Files.Count == 0)
+                        File matchingGoogleFolder = GoogleDriveIsItemExist(googleDrive, googleFolderId, item.Name, "application/vnd.google-apps.folder");
+                        if (matchingGoogleFolder == null)
                         {
                             // Not exist, create one
                             File folderMetadata = new File
@@ -158,32 +155,47 @@ namespace BuildBackup
                             FilesResource.CreateRequest requestUpload = googleDrive.Files.Create(folderMetadata);
                             matchingGoogleFolder = await requestUpload.ExecuteAsync();
                         }
-                        else
-                        {
-                            matchingGoogleFolder = result.Files[0];
-                        }
                         // Lets go deeper
                         await SyncGoogleDriveAsync(item as StorageFolder, matchingGoogleFolder.Id, googleDrive);
                     }
                 }
                 else
                 {
-                    // If folder is build, check if zip exist in Google Drive
-                    FilesResource.ListRequest request = googleDrive.Files.List();
-                    request.Q = "'" + googleFolderId + "' in parents and name = '" + item.Name + "'";
-                    FileList result = request.Execute();
-                    if (result.Files.Count == 0)
+                    // If item is file, check if exist in Google Drive.
+                    File uploadedFile = GoogleDriveIsItemExist(googleDrive, googleFolderId, item.Name, (item as StorageFile).ContentType);
+                    if (uploadedFile == null)
                     {
                         // Not exist, upload to Google Drive
                         StorageFile tempFile = await (item as StorageFile).CopyAsync(ApplicationData.Current.TemporaryFolder, item.Name, NameCollisionOption.ReplaceExisting);
-                        File uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
-                        
+                        uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);                        
                     }
 
                     // If build is too old, delete it.
                     TimeSpan timeDiff = DateTime.Now.Subtract(item.DateCreated.DateTime);
                 }
             }
+        }
+
+        public static File GoogleDriveIsItemExist(DriveService driveService, string parent, string itemName, string contentType)
+        {
+            File googleItem = null;
+            try
+            {
+                FilesResource.ListRequest request = driveService.Files.List();
+                request.Q = "name = '" + itemName + "'";
+                request.Q += " and '" + parent + "' in parents";
+                request.Q += " and mimeType = '" + contentType + "'";
+                FileList result = request.Execute();
+                if (result.Files.Count == 1)
+                    googleItem = result.Files[0];
+                else if (result.Files.Count > 1)
+                { }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
+            }
+            return googleItem;
         }
 
         public static async Task<File> UploadAsync(DriveService driveService, IList<string> parents, StorageFile file)
