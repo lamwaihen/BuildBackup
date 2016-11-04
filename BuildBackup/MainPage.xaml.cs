@@ -113,13 +113,15 @@ namespace BuildBackup
             {
                 if (item.IsOfType(StorageItemTypes.Folder))
                 {
-                    if (item.Name.Length > 12 && item.Name.Substring(item.Name.Length - 12).StartsWith("_LOGID"))
+                    // If folder is build, but only contains 1 file (e.g. ISO, ZIP, EXE), simply go deeper
+                    IReadOnlyList<IStorageItem> folderItems = await (item as StorageFolder).GetItemsAsync();
+
+                    if (item.Name.Length > 12 && item.Name.Substring(item.Name.Length - 12).StartsWith("_LOGID")
+                        && !(folderItems.Count == 1 && folderItems[0].IsOfType(StorageItemTypes.File)))
                     {
                         // If folder is build, check if zip exist in Google Drive
-                        FilesResource.ListRequest request = googleDrive.Files.List();
-                        request.Q = "'" + googleFolderId + "' in parents and mimeType != 'application/vnd.google-apps.folder' and name contains '" + item.Name + "'";
-                        FileList result = request.Execute();
-                        if (result.Files.Count == 0)
+                        File uploadedFile = GoogleDriveIsItemExist(googleDrive, googleFolderId, item.Name + ".zip", "application/x-zip-compressed");
+                        if (uploadedFile == null)
                         {
                             // Not exist, zip and upload
                             // Workaround: http://stackoverflow.com/questions/33801760/
@@ -129,15 +131,16 @@ namespace BuildBackup
                             StorageFile tempFile = await StorageFile.GetFileFromPathAsync(ApplicationData.Current.TemporaryFolder.Path + "\\" + item.Name + ".zip");
 
                             // Upload to Google Drive
-                            File uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
+                            uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
 
                             // Delete temp file and folder
                             await tempFolder.DeleteAsync(StorageDeleteOption.PermanentDelete);
                             await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                         }
 
-                        // If build is too old, delete it.
-                        TimeSpan timeDiff = DateTime.Now.Subtract(item.DateCreated.DateTime);
+                        // If build is too old (180days), delete it.
+                        if (DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                            await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
                     }
                     else
                     {
@@ -146,14 +149,7 @@ namespace BuildBackup
                         if (matchingGoogleFolder == null)
                         {
                             // Not exist, create one
-                            File folderMetadata = new File
-                            {
-                                Name = item.Name,
-                                MimeType = "application/vnd.google-apps.folder",
-                                Parents = new List<string> { googleFolderId }
-                            };
-                            FilesResource.CreateRequest requestUpload = googleDrive.Files.Create(folderMetadata);
-                            matchingGoogleFolder = await requestUpload.ExecuteAsync();
+                            matchingGoogleFolder = await GoogleDriveCreateFolderAsync(googleDrive, googleFolderId, item.Name);
                         }
                         // Lets go deeper
                         await SyncGoogleDriveAsync(item as StorageFolder, matchingGoogleFolder.Id, googleDrive);
@@ -167,24 +163,64 @@ namespace BuildBackup
                     {
                         // Not exist, upload to Google Drive
                         StorageFile tempFile = await (item as StorageFile).CopyAsync(ApplicationData.Current.TemporaryFolder, item.Name, NameCollisionOption.ReplaceExisting);
-                        uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);                        
+                        uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
+                        await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                     }
 
-                    // If build is too old, delete it.
-                    TimeSpan timeDiff = DateTime.Now.Subtract(item.DateCreated.DateTime);
+                    // If build is too large (50MB) and too old (180days), delete it.
+                    BasicProperties prop = await (item as StorageFile).GetBasicPropertiesAsync();
+                    if (prop.Size > 50 * 1048576 && DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                        await item.DeleteAsync(StorageDeleteOption.PermanentDelete);                    
                 }
             }
+        }
+
+        public static async Task<File> GoogleDriveCreateFolderAsync(DriveService driveService, string parent, string itemName)
+        {
+            File googleFolder = null;
+            try
+            {
+                File folderMetadata = new File
+                {
+                    Name = itemName,
+                    MimeType = "application/vnd.google-apps.folder",
+                    Parents = new List<string> { parent }
+                };
+                FilesResource.CreateRequest requestUpload = driveService.Files.Create(folderMetadata);
+                googleFolder = await requestUpload.ExecuteAsync();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
+            }
+
+            return googleFolder;
         }
 
         public static File GoogleDriveIsItemExist(DriveService driveService, string parent, string itemName, string contentType)
         {
             File googleItem = null;
+
+            switch (contentType)
+            {
+                case "application/x-msdownload": contentType = "application/x-msdos-program"; break;
+                case "application/x-zip-compressed": contentType = "application/zip"; break;
+                case "application/vnd.google-apps.folder": break;
+                case "image/png": break;
+                case "image/jpeg": break;
+                case "text/css": break;
+                case "text/html": break;
+                case "text/plain": break;
+                case "text/xml": break;
+                default: break;
+            }
+
             try
             {
                 FilesResource.ListRequest request = driveService.Files.List();
                 request.Q = "name = '" + itemName + "'";
                 request.Q += " and '" + parent + "' in parents";
-                request.Q += " and mimeType = '" + contentType + "'";
+                request.Q += string.IsNullOrWhiteSpace(contentType) ? "" : " and mimeType = '" + contentType + "'";
                 FileList result = request.Execute();
                 if (result.Files.Count == 1)
                     googleItem = result.Files[0];
