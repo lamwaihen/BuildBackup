@@ -8,7 +8,6 @@
     mc:Ignorable="d">
 
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <TextBox x:Name="textBoxStatus" Margin="208,601,0,0" TextWrapping="Wrap" Text="TextBox" VerticalAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Auto" Height="406"/>
-
+        <TextBox x:Name="textBoxStatus" Margin="20" TextWrapping="Wrap" VerticalAlignment="Bottom" ScrollViewer.VerticalScrollBarVisibility="Auto" Height="600"/>
     </Grid>
 </Page>

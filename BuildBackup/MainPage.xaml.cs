@@ -106,19 +106,22 @@ namespace BuildBackup
             m_timerFolderCheck = ThreadPoolTimer.CreateTimer((newTimer) => FolderCheckTimerElpasedHandler(newTimer, rootFolder), TimeSpan.FromHours(6));
         }
 
-        public static async Task SyncGoogleDriveAsync(StorageFolder localFolder, string googleFolderId, DriveService googleDrive)
+        public async Task SyncGoogleDriveAsync(StorageFolder localFolder, string googleFolderId, DriveService googleDrive)
         {
             IReadOnlyList<IStorageItem> localItems = await localFolder.GetItemsAsync();
             foreach (IStorageItem item in localItems)
             {
                 if (item.IsOfType(StorageItemTypes.Folder))
                 {
+                    UpdateStatus("Found folder:\t" + item.Path);
+
                     // If folder is build, but only contains 1 file (e.g. ISO, ZIP, EXE), simply go deeper
                     IReadOnlyList<IStorageItem> folderItems = await (item as StorageFolder).GetItemsAsync();
 
                     if (item.Name.Length > 12 && item.Name.Substring(item.Name.Length - 12).StartsWith("_LOGID")
                         && !(folderItems.Count == 1 && folderItems[0].IsOfType(StorageItemTypes.File)))
                     {
+                        UpdateStatus("Folder:\t" + item.Name + " contains build.");
                         // If folder is build, check if zip exist in Google Drive
                         File uploadedFile = GoogleDriveIsItemExist(googleDrive, googleFolderId, item.Name + ".zip", "application/x-zip-compressed");
                         if (uploadedFile == null)
@@ -132,6 +135,7 @@ namespace BuildBackup
 
                             // Upload to Google Drive
                             uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
+                            UpdateStatus("Zip and uploaded:\t" + tempFile.Name + " as ID:" + uploadedFile.Id);
 
                             // Delete temp file and folder
                             await tempFolder.DeleteAsync(StorageDeleteOption.PermanentDelete);
@@ -140,7 +144,10 @@ namespace BuildBackup
 
                         // If build is too old (180days), delete it.
                         if (DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                        {
                             await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                            UpdateStatus("Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString());
+                        }
                     }
                     else
                     {
@@ -157,6 +164,8 @@ namespace BuildBackup
                 }
                 else
                 {
+                    UpdateStatus("Found file:\t" + item.Path);
+
                     // If item is file, check if exist in Google Drive.
                     File uploadedFile = GoogleDriveIsItemExist(googleDrive, googleFolderId, item.Name, (item as StorageFile).ContentType);
                     if (uploadedFile == null)
@@ -164,15 +173,24 @@ namespace BuildBackup
                         // Not exist, upload to Google Drive
                         StorageFile tempFile = await (item as StorageFile).CopyAsync(ApplicationData.Current.TemporaryFolder, item.Name, NameCollisionOption.ReplaceExisting);
                         uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
+                        UpdateStatus("Uploaded:\t" + tempFile.Name + " as ID:" + uploadedFile.Id);
                         await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                     }
 
                     // If build is too large (50MB) and too old (180days), delete it.
                     BasicProperties prop = await (item as StorageFile).GetBasicPropertiesAsync();
                     if (prop.Size > 50 * 1048576 && DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
-                        await item.DeleteAsync(StorageDeleteOption.PermanentDelete);                    
+                    {
+                        await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                        UpdateStatus("Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString() + " size " + string.Format("{0:N}%", (double)prop.Size / 1048576) + "MB.");
+                    }
                 }
             }
+        }
+
+        private void UpdateStatus(string status)
+        {
+            Utility.UIThreadExecute(() => { textBoxStatus.Text += status + "\n"; });
         }
 
         public static async Task<File> GoogleDriveCreateFolderAsync(DriveService driveService, string parent, string itemName)
