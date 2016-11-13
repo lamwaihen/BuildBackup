@@ -15,6 +15,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
+using Windows.Foundation.Diagnostics;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.Storage.Pickers;
@@ -51,45 +52,40 @@ namespace BuildBackup
 
         private async void Initialize()
         {
-            FolderPicker folderPicker = new FolderPicker();
-            folderPicker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-            folderPicker.FileTypeFilter.Add("*");
-            StorageFolder folder = await folderPicker.PickSingleFolderAsync();
-            if (folder != null)
+            // Google
+            UserCredential credential = null;
+            try
             {
-                m_folders = await folder.GetFoldersAsync();
-
-                // Google
-                UserCredential credential = null;
-                try
-                {
-                    credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
-                        new Uri("ms-appx:///Assets/client_secret.json"),
-                        new[] { DriveService.Scope.Drive }, "user", CancellationToken.None);
-                }
-                catch (AggregateException ex)
-                {
-                    Debug.Write("Credential failed, " + ex.Message);
-                }
-
-                // Create Drive API service.
-                m_driveService = new DriveService(new BaseClientService.Initializer()
-                {
-                    HttpClientInitializer = credential,
-                    ApplicationName = "Corel Build Backup",
-                });
-
-                // Get Build_Backup folder
-                FilesResource.ListRequest request = m_driveService.Files.List();
-                request.Q = "mimeType = 'application/vnd.google-apps.folder' and name = 'Build_Backup'";
-                request.Spaces = "drive";
-                request.Fields = "files(id, name)";
-                FileList result = request.Execute();
-                m_buildBackupFolderId = result.Files[0].Id;
-
-                // Create a timer to periodically check the build folders
-                m_timerFolderCheck = ThreadPoolTimer.CreateTimer((timer) => FolderCheckTimerElpasedHandler(timer, folder), TimeSpan.FromMilliseconds(10));
+                credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
+                    new Uri("ms-appx:///Assets/client_secret.json"),
+                    new[] { DriveService.Scope.Drive }, "user", CancellationToken.None);
             }
+            catch (AggregateException ex)
+            {
+                Debug.Write("Credential failed, " + ex.Message);
+            }
+
+            // Create Drive API service.
+            m_driveService = new DriveService(new BaseClientService.Initializer()
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "Corel Build Backup",
+            });
+
+            // Get Build_Backup folder
+            FilesResource.ListRequest request = m_driveService.Files.List();
+            request.Q = "mimeType = 'application/vnd.google-apps.folder' and 'root' in parents";
+            request.Spaces = "drive";
+            request.Fields = "files(id, name)";
+            FileList result = request.Execute();
+            foreach (File item in result.Files)
+            {
+                ComboBoxItem cbItem = new ComboBoxItem { Content = item.Name, Name = item.Id, Tag = item.Id };
+                comboBoxGoogleFolders.Items.Add(cbItem);
+
+                if (item.Name == "Build_Backup")
+                    comboBoxGoogleFolders.SelectedItem = cbItem;
+            }                    
         }
 
         private async void FolderCheckTimerElpasedHandler(ThreadPoolTimer timer, StorageFolder rootFolder)
@@ -142,11 +138,14 @@ namespace BuildBackup
                             await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                         }
 
-                        // If build is too old (180days), delete it.
-                        if (DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                        if (uploadedFile != null)
                         {
-                            await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                            UpdateStatus("Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString());
+                            // If build is too old (180days), delete it.
+                            if (DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                            {
+                                await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                                UpdateStatus("Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString());
+                            }
                         }
                     }
                     else
@@ -164,7 +163,7 @@ namespace BuildBackup
                 }
                 else
                 {
-                    UpdateStatus("Found file:\t" + item.Path);
+                    UpdateStatus("Found file:\t" + item.Name);
 
                     // If item is file, check if exist in Google Drive.
                     File uploadedFile = GoogleDriveIsItemExist(googleDrive, googleFolderId, item.Name, (item as StorageFile).ContentType);
@@ -177,12 +176,15 @@ namespace BuildBackup
                         await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                     }
 
-                    // If build is too large (50MB) and too old (180days), delete it.
-                    BasicProperties prop = await (item as StorageFile).GetBasicPropertiesAsync();
-                    if (prop.Size > 50 * 1048576 && DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                    if (uploadedFile != null)
                     {
-                        await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                        UpdateStatus("Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString() + " size " + string.Format("{0:N}%", (double)prop.Size / 1048576) + "MB.");
+                        // If build is too large (50MB) and too old (180days), delete it.
+                        BasicProperties prop = await (item as StorageFile).GetBasicPropertiesAsync();
+                        if (prop.Size > 50 * 1048576 && DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                        {
+                            await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                            UpdateStatus("Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString() + " size " + string.Format("{0:N}%", (double)prop.Size / 1048576) + "MB.");
+                        }
                     }
                 }
             }
@@ -190,7 +192,10 @@ namespace BuildBackup
 
         private void UpdateStatus(string status)
         {
-            Utility.UIThreadExecute(() => { textBoxStatus.Text += status + "\n"; });
+            Utility.UIThreadExecute(() =>
+            {
+                textBoxStatus.Text += DateTime.Now.ToString() +"\t" + status + "\n";
+            });
         }
 
         public static async Task<File> GoogleDriveCreateFolderAsync(DriveService driveService, string parent, string itemName)
@@ -221,6 +226,7 @@ namespace BuildBackup
 
             switch (contentType)
             {
+                case "application/msword": break;
                 case "application/x-msdownload": contentType = "application/x-msdos-program"; break;
                 case "application/x-zip-compressed": contentType = "application/zip"; break;
                 case "application/vnd.google-apps.folder": break;
@@ -239,6 +245,7 @@ namespace BuildBackup
                 request.Q = "name = '" + itemName + "'";
                 request.Q += " and '" + parent + "' in parents";
                 request.Q += string.IsNullOrWhiteSpace(contentType) ? "" : " and mimeType = '" + contentType + "'";
+                request.Q += " and trashed = false";
                 FileList result = request.Execute();
                 if (result.Files.Count == 1)
                     googleItem = result.Files[0];
@@ -340,6 +347,38 @@ namespace BuildBackup
             foreach (var folder in await source.GetFoldersAsync())
             {
                 await CopyFolderAsync(folder, destinationFolder);
+            }
+        }
+
+        private void textBoxStatus_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            var grid = (Grid)VisualTreeHelper.GetChild(textBoxStatus, 0);
+            for (var i = 0; i <= VisualTreeHelper.GetChildrenCount(grid) - 1; i++)
+            {
+                object obj = VisualTreeHelper.GetChild(grid, i);
+                if (!(obj is ScrollViewer)) continue;
+                ((ScrollViewer)obj).ChangeView(0.0f, ((ScrollViewer)obj).ExtentHeight, 1.0f);
+                break;
+            }
+        }
+
+        private void comboBoxGoogleFolders_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            m_buildBackupFolderId = (comboBoxGoogleFolders.SelectedItem as ComboBoxItem).Tag.ToString();
+        }
+
+        private async void buttonStartBackup_Click(object sender, RoutedEventArgs e)
+        {
+            FolderPicker folderPicker = new FolderPicker();
+            folderPicker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
+            folderPicker.FileTypeFilter.Add("*");
+            StorageFolder folder = await folderPicker.PickSingleFolderAsync();
+            if (folder != null)
+            {
+                m_folders = await folder.GetFoldersAsync();
+
+                // Create a timer to periodically check the build folders
+                m_timerFolderCheck = ThreadPoolTimer.CreateTimer((timer) => FolderCheckTimerElpasedHandler(timer, folder), TimeSpan.FromMilliseconds(10));
             }
         }
     }
