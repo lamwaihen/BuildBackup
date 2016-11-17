@@ -15,7 +15,8 @@
             <TextBox x:Name="textBoxNumDays" Text="180" RelativePanel.RightOf="checkBoxDeleteOldFiles" RelativePanel.AlignVerticalCenterWith="checkBoxDeleteOldFiles"/>
             <TextBlock x:Name="textBlock2" Margin="20" Text="Days" RelativePanel.RightOf="textBoxNumDays" RelativePanel.AlignVerticalCenterWith="checkBoxDeleteOldFiles"/>
             <Button x:Name="buttonStartBackup" Margin="20" Click="buttonStartBackup_Click" Content="Start Backup" RelativePanel.Below="checkBoxDeleteOldFiles"/>
+            <Button x:Name="buttonCancelBackup" Margin="20" Click="buttonCancelBackup_Click" Content="Cancel" RelativePanel.RightOf="buttonStartBackup" RelativePanel.Below="checkBoxDeleteOldFiles"/>
         </RelativePanel>
-        <TextBox x:Name="textBoxStatus" Margin="20" TextWrapping="Wrap" VerticalAlignment="Bottom" ScrollViewer.VerticalScrollBarVisibility="Auto" Height="600" TextChanged="textBoxStatus_TextChanged"/>
+        <TextBox x:Name="textBoxStatus" Margin="20" TextWrapping="Wrap" VerticalAlignment="Bottom" ScrollViewer.VerticalScrollBarVisibility="Auto" Height="600" FontFamily="Courier New" TextChanged="textBoxStatus_TextChanged"/>
     </Grid>
 </Page>
