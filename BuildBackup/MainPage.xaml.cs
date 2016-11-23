@@ -58,16 +58,23 @@ namespace BuildBackup
 
         static private TraceLevel _traceLevel = TraceLevel.Verbose;
         static private bool _cancel = false;
+        static private string _log;
+
+        static private int totalFoundItem;
+        static private int proceedFoundItem;
 
         ThreadPoolTimer m_timerFolderCheck = null;
         IReadOnlyList<StorageFolder> m_folders;
 
         DriveService m_driveService = null;
         string m_buildBackupFolderId;
+        private Payload p;
 
         public MainPage()
         {
             this.InitializeComponent();
+
+            p = new Payload();
 
             Initialize();
         }
@@ -121,13 +128,14 @@ namespace BuildBackup
             StorageFile logFile = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
 
             await SyncGoogleDriveAsync(rootFolder, m_buildBackupFolderId, m_driveService);
-
+            totalFoundItem = proceedFoundItem = 0;
+            p.ProcessingItemProgress = p.FoundItemProgress = 0;
 
             if (logFile != null)
             {
                 Utility.UIThreadExecute(async () =>
                 {
-                    await FileIO.WriteTextAsync(logFile, textBoxStatus.Text);
+                    await FileIO.WriteTextAsync(logFile, p.Log);
                 });
             }
 
@@ -137,61 +145,77 @@ namespace BuildBackup
 
         public async Task SyncGoogleDriveAsync(StorageFolder localFolder, string googleFolderId, DriveService googleDrive)
         {
-            FileList googleItems = GoogleDriveItems(googleDrive, googleFolderId, SortOrder.NameAsc);
-
             try
             {
                 IReadOnlyList<IStorageItem> localItems = await SortStorageItemsAsync(localFolder, SortOrder.DateModifiedAsc);
+                totalFoundItem += localItems.Count;
                 // If folder contains nothing, delete itself
-                if (localItems.Count <= 0 && !localFolder.Name.EndsWith("_BUILDS"))
-                {
-                    await localFolder.DeleteAsync();
-                    UpdateStatus(TraceLevel.Warning, "Deleted empty folder:\t" + localFolder.Path);
-                }
+                //if (localItems.Count <= 0 && !localFolder.Name.EndsWith("_BUILDS"))
+                //{
+                //    await localFolder.DeleteAsync();
+                //    UpdateStatus(TraceLevel.Warning, string.Format("Deleted\t{0}", localFolder.Path));
+                //    return;
+                //}
 
+                FileList googleItems = GoogleDriveItems(googleDrive, googleFolderId, SortOrder.NameAsc);
                 foreach (IStorageItem item in localItems)
                 {
                     if (_cancel)
+                    {
+                        UpdateStatus(TraceLevel.Info, "Backup cancelled");
                         break;
+                    }
+
+                    UpdateStatus(TraceLevel.Verbose, item.Path);
+                    p.FoundItemProgress = (double)++proceedFoundItem / totalFoundItem * 100;
+                    p.ProcessingItemProgress = 0;
 
                     if (item.IsOfType(StorageItemTypes.Folder))
                     {
-                        UpdateStatus(TraceLevel.Verbose, "Found folder:\t" + item.Path);
-
                         // If folder is build, but only contains 1 file (e.g. ISO, ZIP, EXE), simply go deeper
-                        IReadOnlyList<IStorageItem> folderItems = await (item as StorageFolder).GetItemsAsync();
+                        IStorageItem setupFile = await (item as StorageFolder).TryGetItemAsync("setup.exe");
+                        IStorageItem autorunFile = await (item as StorageFolder).TryGetItemAsync("autorun.exe");
+                        IStorageItem issetupFile = await (item as StorageFolder).TryGetItemAsync("issetup.dll");
 
-                        if (item.Name.Contains("_LOGID") && !(folderItems.Count == 1 && folderItems[0].IsOfType(StorageItemTypes.File)))
+                        //if (item.Name.Contains("_LOGID") && !(folderItems.Count == 1 && folderItems[0].IsOfType(StorageItemTypes.File)))
+                        if (setupFile != null || autorunFile != null || issetupFile != null)
                         {
-                            UpdateStatus(TraceLevel.Info, "Folder:\t" + item.Name + " contains build.");
+                            UpdateStatus(TraceLevel.Info, string.Format("Folder contains build\t{0}", item.Path));
                             // If folder is build, check if zip exist in Google Drive
                             File uploadedFile = GoogleDriveIsItemExist(googleItems, item.Name + ".zip", "application/x-zip-compressed");
+                            // Check again if the entire folder has been uploaded.
+                            if (uploadedFile == null)
+                                uploadedFile = GoogleDriveIsItemExist(googleItems, item.Name, "application/vnd.google-apps.folder");
+
                             if (uploadedFile == null)
                             {
                                 // Not exist, zip and upload
                                 // Workaround: http://stackoverflow.com/questions/33801760/
-                                UpdateStatus(TraceLevel.Verbose, "Preparing folder to zip:\t" + item.Name);
-                                await CopyFolderAsync(item as StorageFolder, ApplicationData.Current.TemporaryFolder, item.Name);
-                                StorageFolder tempFolder = await StorageFolder.GetFolderFromPathAsync(ApplicationData.Current.TemporaryFolder.Path + "\\" + item.Name);
-                                ZipFile.CreateFromDirectory(tempFolder.Path, ApplicationData.Current.TemporaryFolder.Path + "\\" + item.Name + ".zip", CompressionLevel.Optimal, false);
-                                StorageFile tempFile = await StorageFile.GetFileFromPathAsync(ApplicationData.Current.TemporaryFolder.Path + "\\" + item.Name + ".zip");
+                                string zipName = DateTime.Now.ToString("HHmmssfff");
+                                string zipPath = string.Format("{0}\\{1}.zip", ApplicationData.Current.TemporaryFolder.Path, zipName);
+                                UpdateStatus(TraceLevel.Info, string.Format("Zipping\t{0}", zipPath));
+                                await CopyFolderAsync(item as StorageFolder, ApplicationData.Current.TemporaryFolder, zipName);
+                                StorageFolder tempFolder = await ApplicationData.Current.TemporaryFolder.GetFolderAsync(zipName);
+                                ZipFile.CreateFromDirectory(tempFolder.Path, zipPath, CompressionLevel.Optimal, false);
+                                StorageFile tempFile = await ApplicationData.Current.TemporaryFolder.GetFileAsync(zipName + ".zip");
+                                UpdateStatus(TraceLevel.Info, string.Format("Zipped\t{0}", zipPath));
 
                                 // Upload to Google Drive
-                                uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
-                                UpdateStatus(TraceLevel.Warning, "Zip and uploaded:\t" + tempFile.Name + " as ID:" + uploadedFile.Id);
+                                uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile, item.Name + ".zip");
+                                UpdateStatus(TraceLevel.Warning, string.Format("Uploaded\t{0} to https://drive.google.com/open?id={1}", zipPath, uploadedFile.Id));
 
                                 // Delete temp file and folder
                                 await tempFolder.DeleteAsync(StorageDeleteOption.PermanentDelete);
                                 await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                             }
 
-                            if (uploadedFile != null)
+                            if (uploadedFile != null && p.CanDeleteOldFiles == true)
                             {
                                 // If build is too old (180days), delete it.
-                                if (DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                                if (DateTime.Now.Subtract(item.DateCreated.DateTime).Days > p.DaysToDelete)
                                 {
                                     await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                                    UpdateStatus(TraceLevel.Warning, "Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString());
+                                    UpdateStatus(TraceLevel.Warning, string.Format("Deleted\t{0} created on {1}", item.Path, item.DateCreated.Date));
                                 }
                             }
                         }
@@ -201,10 +225,8 @@ namespace BuildBackup
                             File matchingGoogleFolder = GoogleDriveIsItemExist(googleItems, item.Name, "application/vnd.google-apps.folder");
                             if (matchingGoogleFolder == null)
                             {
-
                                 // Not exist, create one
                                 matchingGoogleFolder = await GoogleDriveCreateFolderAsync(googleDrive, googleFolderId, item.Name);
-
                             }
                             // Lets go deeper
                             await SyncGoogleDriveAsync(item as StorageFolder, matchingGoogleFolder.Id, googleDrive);
@@ -212,28 +234,27 @@ namespace BuildBackup
                     }
                     else
                     {
-                        UpdateStatus(TraceLevel.Verbose, "Found file:\t" + item.Name);
-
                         // If item is file, check if exist in Google Drive.
                         File uploadedFile = GoogleDriveIsItemExist(googleItems, item.Name, (item as StorageFile).ContentType);
                         if (uploadedFile == null)
                         {
                             // Not exist, upload to Google Drive
-                            UpdateStatus(TraceLevel.Verbose, "Preparing file to upload:\t" + item.Name);
+                            UpdateStatus(TraceLevel.Info, string.Format("Preparing\t{0}", item.Path));
                             StorageFile tempFile = await (item as StorageFile).CopyAsync(ApplicationData.Current.TemporaryFolder, item.Name, NameCollisionOption.ReplaceExisting);
                             uploadedFile = await UploadAsync(googleDrive, new List<string> { googleFolderId }, tempFile);
-                            UpdateStatus(TraceLevel.Warning, "Uploaded:\t" + tempFile.Name + " as ID:" + uploadedFile.Id);
+                            UpdateStatus(TraceLevel.Warning, string.Format("Uploaded\t{0}", item.Path));
+
                             await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                         }
 
-                        if (uploadedFile != null)
+                        if (uploadedFile != null && p.CanDeleteOldFiles == true)
                         {
                             // If build is too large (50MB) and too old (180days), delete it.
                             BasicProperties prop = await (item as StorageFile).GetBasicPropertiesAsync();
-                            if (prop.Size > 50 * 1048576 && DateTime.Now.Subtract(item.DateCreated.DateTime).Days > 180)
+                            if (prop.Size > 50 * 1048576 && DateTime.Now.Subtract(item.DateCreated.DateTime).Days > p.DaysToDelete)
                             {
                                 await item.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                                UpdateStatus(TraceLevel.Warning, "Deleted:\t" + item.Name + ", created on " + item.DateCreated.DateTime.ToString() + " size " + string.Format("{0:N}%", (double)prop.Size / 1048576) + "MB.");
+                                UpdateStatus(TraceLevel.Warning, string.Format("Deleted\t{0} created on {1} size {2:N}MB", item.Path, item.DateCreated.Date, (double)prop.Size / 1048576));
                             }
                         }
                     }
@@ -242,7 +263,7 @@ namespace BuildBackup
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
-                UpdateStatus(TraceLevel.Error, string.Format("Failed to sync folder {0}:\t{1}", localFolder.Name, ex.Message));
+                UpdateStatus(TraceLevel.Error, string.Format("Sync failed\t{0} message {1}", localFolder.Path, ex.Message));
             }
         }
 
@@ -253,13 +274,12 @@ namespace BuildBackup
 
         private void UpdateStatus(TraceLevel level, string msg)
         {
-            if (_traceLevel >= level)
-            {
-                Utility.UIThreadExecute(() =>
-                {
-                    textBoxStatus.Text += string.Format("[{0}][{1}] {2}\n", level.ToString().PadLeft(7), DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss.fff"), msg);
-                });
-            }
+            if (level == TraceLevel.Verbose)
+                p.FoundItem = msg;
+            else
+                p.ProcessingItem = string.Format("[{0}] {1}", level.ToString().PadLeft(7), msg);
+
+            Debug.WriteLine(string.Format("[{0}][{1}] {2}\n", level.ToString().PadLeft(7), DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss.fff"), msg));
         }
 
         public async Task<File> GoogleDriveCreateFolderAsync(DriveService driveService, string parent, string itemName)
@@ -279,9 +299,9 @@ namespace BuildBackup
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
-                UpdateStatus(TraceLevel.Error, "Failed to create folder:\t" + ex.Message);
+                UpdateStatus(TraceLevel.Error, string.Format("Folder create failed\t{0} parent {1} message {2}", itemName, parent, ex.Message));
             }
-            UpdateStatus(TraceLevel.Info, "Created folder:\t" + itemName + " as " + googleFolder.Id);
+            UpdateStatus(TraceLevel.Info, string.Format("Folder created\t{0} at {1}", itemName, googleFolder.Id));
             return googleFolder;
         }
 
@@ -290,38 +310,45 @@ namespace BuildBackup
             FileList sortedResult = new FileList();
             try
             {
-                FilesResource.ListRequest request = driveService.Files.List();
-                request.Q = "'" + parent + "' in parents";
-                request.Q += " and trashed = false";
-                request.Spaces = "drive";
-                FileList result = request.Execute();
+                string nextPageToken = null;
+                IEnumerable<File> files = new List<File>();
+                do
+                {
+                    FilesResource.ListRequest request = driveService.Files.List();
+                    request.Q = "'" + parent + "' in parents";
+                    request.Q += " and trashed = false";
+                    request.Spaces = "drive";
+                    request.PageToken = nextPageToken;
+                    FileList result = request.Execute();
+                    files = files.Concat(result.Files);
+                } while (nextPageToken != null);
 
                 switch (order)
                 {
                     case SortOrder.NameAsc:
-                        sortedResult.Files = result.Files.OrderBy(x => x.Name).ToList();
+                        sortedResult.Files = files.OrderBy(x => x.Name).ToList();
                         break;
                     case SortOrder.NameDesc:
-                        sortedResult.Files = result.Files.OrderByDescending(x => x.Name).ToList();
+                        sortedResult.Files = files.OrderByDescending(x => x.Name).ToList();
                         break;
                     case SortOrder.DateCreatedAsc:
-                        sortedResult.Files = result.Files.OrderBy(x => x.CreatedTime.GetValueOrDefault()).ToList();
+                        sortedResult.Files = files.OrderBy(x => x.CreatedTime.GetValueOrDefault()).ToList();
                         break;
                     case SortOrder.DateCreatedDesc:
-                        sortedResult.Files = result.Files.OrderByDescending(x => x.CreatedTime.GetValueOrDefault()).ToList();
+                        sortedResult.Files = files.OrderByDescending(x => x.CreatedTime.GetValueOrDefault()).ToList();
                         break;
                     case SortOrder.DateModifiedAsc:
-                        sortedResult.Files = result.Files.OrderBy(x => x.ModifiedTime.GetValueOrDefault()).ToList();
+                        sortedResult.Files = files.OrderBy(x => x.ModifiedTime.GetValueOrDefault()).ToList();
                         break;
                     case SortOrder.DateModifiedDesc:
-                        sortedResult.Files = result.Files.OrderByDescending(x => x.ModifiedTime.GetValueOrDefault()).ToList();
+                        sortedResult.Files = files.OrderByDescending(x => x.ModifiedTime.GetValueOrDefault()).ToList();
                         break;
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
-                UpdateStatus(TraceLevel.Error, "Failed to list files from parent:\t" + parent + " error: " + ex.Message);
+                UpdateStatus(TraceLevel.Error, string.Format("Folder list failed\t{0} message {1}", parent, ex.Message));
             }
 
             return sortedResult;
@@ -377,15 +404,18 @@ namespace BuildBackup
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
-                UpdateStatus(TraceLevel.Error, "Failed to query file:\t" + itemName + " error: " + ex.Message);
+                UpdateStatus(TraceLevel.Error, string.Format("File query failed\t{0} message {1}", itemName , ex.Message));
             }
             return googleItem;
         }
 
-        public async Task<File> UploadAsync(DriveService driveService, IList<string> parents, StorageFile file)
+        public async Task<File> UploadAsync(DriveService driveService, IList<string> parents, StorageFile file, string itemName = "")
         {
+            if (string.IsNullOrWhiteSpace(itemName))
+                itemName = file.Name;
+
             // Prepare the JSON metadata
-            string json = "{\"name\":\"" + file.Name.Replace("'", "\\'") + "\"";
+            string json = "{\"name\":\"" + itemName.Replace("'", "\\'") + "\"";
             if (parents.Count > 0)
             {
                 json += ", \"parents\": [";
@@ -459,6 +489,7 @@ namespace BuildBackup
                             {
                                 string range = httpResponse.Headers["Range"];
                                 transferedSize = Convert.ToUInt64(range.Substring(range.LastIndexOf("-") + 1)) + 1;
+                                p.ProcessingItemProgress = (double)transferedSize / fileSize * 100;
                                 Debug.WriteLine(string.Format("Uploaded {0} bytes", transferedSize));
                                 continue;
                             }
@@ -483,7 +514,7 @@ namespace BuildBackup
                 FilesResource.ListRequest request = driveService.Files.List();
                 if (parents.Count > 0)
                     request.Q += "'" + parents[0] + "' in parents and ";
-                request.Q += "name = '" + file.Name.Replace("'", "\\'") + "'";
+                request.Q += "name = '" + itemName.Replace("'", "\\'") + "'";
                 FileList result = request.Execute();
                 if (result.Files.Count > 0)
                     uploadedFile = result.Files[0];
@@ -491,7 +522,7 @@ namespace BuildBackup
             catch (Exception ex)
             {
                 Debug.WriteLine(ex.Message);
-                UpdateStatus(TraceLevel.Error, "Failed to upload file:\t" + file.Name + " error: " + ex.Message);
+                UpdateStatus(TraceLevel.Error, string.Format("File upload failed\t{0} message {1}", file.Path, ex.Message));
             }
 
             return uploadedFile;
@@ -567,17 +598,6 @@ namespace BuildBackup
             return localItems;
         }
 
-        private void textBoxStatus_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            var grid = (Grid)VisualTreeHelper.GetChild(textBoxStatus, 0);
-            for (var i = 0; i <= VisualTreeHelper.GetChildrenCount(grid) - 1; i++)
-            {
-                object obj = VisualTreeHelper.GetChild(grid, i);
-                if (!(obj is ScrollViewer)) continue;
-                ((ScrollViewer)obj).ChangeView(0.0f, ((ScrollViewer)obj).ExtentHeight, 1.0f);
-                break;
-            }
-        }
 
         private void comboBoxGoogleFolders_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {

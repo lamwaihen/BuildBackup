@@ -8,15 +8,45 @@
     mc:Ignorable="d">
 
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <RelativePanel>
-            <TextBlock x:Name="textBlock1" HorizontalAlignment="Left" Margin="20" TextWrapping="Wrap" Text="Destination Folder:" VerticalAlignment="Top"/>
-            <ComboBox x:Name="comboBoxGoogleFolders" Margin="20" SelectionChanged="comboBoxGoogleFolders_SelectionChanged" RelativePanel.RightOf="textBlock1" RelativePanel.AlignVerticalCenterWith="textBlock1"/>
-            <CheckBox x:Name="checkBoxDeleteOldFiles" Margin="20" Content="Delete Files Older Than " RelativePanel.Below="textBlock1"/>
-            <TextBox x:Name="textBoxNumDays" Text="180" RelativePanel.RightOf="checkBoxDeleteOldFiles" RelativePanel.AlignVerticalCenterWith="checkBoxDeleteOldFiles"/>
-            <TextBlock x:Name="textBlock2" Margin="20" Text="Days" RelativePanel.RightOf="textBoxNumDays" RelativePanel.AlignVerticalCenterWith="checkBoxDeleteOldFiles"/>
-            <Button x:Name="buttonStartBackup" Margin="20" Click="buttonStartBackup_Click" Content="Start Backup" RelativePanel.Below="checkBoxDeleteOldFiles"/>
-            <Button x:Name="buttonCancelBackup" Margin="20" Click="buttonCancelBackup_Click" Content="Cancel" RelativePanel.RightOf="buttonStartBackup" RelativePanel.Below="checkBoxDeleteOldFiles"/>
-        </RelativePanel>
-        <TextBox x:Name="textBoxStatus" Margin="20" TextWrapping="Wrap" VerticalAlignment="Bottom" ScrollViewer.VerticalScrollBarVisibility="Auto" Height="600" FontFamily="Courier New" TextChanged="textBoxStatus_TextChanged"/>
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal">
+                <TextBlock x:Name="textBlock1" HorizontalAlignment="Left" Margin="10" TextWrapping="Wrap" Text="Destination Folder:" VerticalAlignment="Top"/>
+                <ComboBox x:Name="comboBoxGoogleFolders" Margin="10" Height="32" SelectionChanged="comboBoxGoogleFolders_SelectionChanged"/>
+            </StackPanel>
+            <StackPanel Grid.Row="1" Orientation="Horizontal">
+                <CheckBox x:Name="checkBoxDeleteOldFiles" Margin="10" Content="Delete Files Older Than " IsChecked="{x:Bind Path=p.CanDeleteOldFiles, Mode=TwoWay}"/>
+                <TextBox x:Name="textBoxNumDays" Text="{x:Bind Path=p.DaysToDelete, Mode=TwoWay}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="textBlock2" Margin="10" Text="Days" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                <Button x:Name="buttonStartBackup" Margin="10" Click="buttonStartBackup_Click" Content="Start Backup"/>
+                <Button x:Name="buttonCancelBackup" Margin="10" Click="buttonCancelBackup_Click" Content="Cancel"/>
+            </StackPanel>
+            <Grid Grid.Row="3" Background="LightGray" VerticalAlignment="Bottom" Margin="20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="textBlock2_1" Grid.Column="0" Grid.Row="0" Text="Found item: " Margin="10"/>
+                <TextBlock x:Name="textBlock2_2" Grid.Column="0" Grid.Row="1" Text="Processing item: " Margin="10"/>
+
+                <TextBlock x:Name="textBlockFoundItem" Grid.Column="1" Grid.Row="0" Margin="10" Text="{x:Bind Path=p.FoundItem, Mode=OneWay}" TextWrapping="Wrap"/>
+                <TextBlock x:Name="textBlockProcessingItem" Grid.Column="1" Grid.Row="1" Margin="10" Text="{x:Bind Path=p.ProcessingItem, Mode=OneWay}" Height="45" TextWrapping="Wrap"/>
+
+                <ProgressBar x:Name="progressBarFoundItem" Grid.Column="2" Grid.Row="0" Margin="10" Width="360" Height="20" Value="{x:Bind Path=p.FoundItemProgress, Mode=OneWay}"/>
+                <ProgressBar x:Name="progressBarProcessingItem" Grid.Column="2" Grid.Row="1" Margin="10" Width="360" Height="20" VerticalAlignment="Top" Value="{x:Bind Path=p.ProcessingItemProgress, Mode=OneWay}"/>
+            </Grid>
+        </Grid>        
     </Grid>
 </Page>
