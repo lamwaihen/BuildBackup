@@ -11,6 +11,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Foundation;
@@ -127,7 +128,10 @@ namespace BuildBackup
 
             StorageFile logFile = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
 
-            await SyncGoogleDriveAsync(rootFolder, m_buildBackupFolderId, m_driveService);
+            if (m_buildBackupFolderId == "0B8j6UJY_E28CdGg5bXV2dGQtZzQ")
+                await SyncBuildLogsGoogleDriveAsync(rootFolder, m_buildBackupFolderId, m_driveService);
+            else
+                await SyncGoogleDriveAsync(rootFolder, m_buildBackupFolderId, m_driveService);
             totalFoundItem = proceedFoundItem = 0;
             p.ProcessingItemProgress = p.FoundItemProgress = 0;
 
@@ -140,22 +144,136 @@ namespace BuildBackup
             }
 
             // Check again after 6 hours
-            m_timerFolderCheck = ThreadPoolTimer.CreateTimer((newTimer) => FolderCheckTimerElpasedHandler(newTimer, rootFolder), TimeSpan.FromHours(6));
+            m_timerFolderCheck = ThreadPoolTimer.CreateTimer((newTimer) => FolderCheckTimerElpasedHandler(newTimer, rootFolder), TimeSpan.FromHours(3));
+        }
+
+        public async Task SyncBuildLogsGoogleDriveAsync(StorageFolder localFolder, string googleFolderId, DriveService googleDrive)
+        {
+            try
+            {
+                FileList googleItems = GoogleDriveItems(googleDrive, googleFolderId, SortOrder.NameAsc);
+                foreach (File googlelogFolder in googleItems.Files)
+                {
+                    if (googlelogFolder.Name != "branchinfo")
+                        continue;
+                    // First we find the matching local log folder
+                    StorageFolder localLogFolder = await localFolder.GetFolderAsync(googlelogFolder.Name);
+                    // Proceed with subfolders first
+                    IReadOnlyList<IStorageFolder> localSubFolders = await GetAllSubfoldersAsync(localLogFolder);
+
+                    foreach (StorageFolder localSubFolder in localSubFolders)
+                    {
+                        IReadOnlyList<StorageFile> files = await localSubFolder.GetFilesAsync();
+                        totalFoundItem += files.Count;
+                        File googleSubfolder = null;
+                        FileList googleSubfolderItems = null;
+                        List<StorageFile> filesToDelete = new List<StorageFile>();
+                        foreach (StorageFile file in files)
+                        {
+                            if (_cancel)
+                            {
+                                UpdateStatus(TraceLevel.Info, "Backup cancelled");
+                                break;
+                            }
+                            UpdateStatus(TraceLevel.Verbose, file.Path);
+                            p.FoundItemProgress = (double)++proceedFoundItem / totalFoundItem * 100;
+                            p.ProcessingItemProgress = 0;
+
+                            string googleFilename = file.Name;
+                            if (file.FileType == ".zip")
+                            {
+                                googleFilename = file.DisplayName;
+                            }
+
+                            string matchingFolderName = GetLogSubfolderName(file.Name, p.FolderMaxItems);
+                            if (googleSubfolder == null || googleSubfolder.Name != matchingFolderName)
+                            {
+                                googleSubfolder = await GoogleDriveCreateFolderAsync(googleDrive, googlelogFolder.Id, matchingFolderName);
+                                googleSubfolderItems = GoogleDriveItems(googleDrive, googleSubfolder.Id, SortOrder.NameAsc);
+                            }
+
+                            File uploadedFile = GoogleDriveIsItemExist(googleSubfolderItems, googleFilename, "text/plain");
+                            if (uploadedFile == null)
+                            {
+                                StorageFile tempZipFile = null;
+                                StorageFile tempFile = null;
+
+                                if (file.FileType == ".zip")
+                                {
+                                    tempZipFile = await file.CopyAsync(ApplicationData.Current.TemporaryFolder, file.Name, NameCollisionOption.ReplaceExisting);
+                                    ZipFile.ExtractToDirectory(tempZipFile.Path, ApplicationData.Current.TemporaryFolder.Path);
+                                    tempFile = await ApplicationData.Current.TemporaryFolder.GetFileAsync(googleFilename);
+                                }
+                                else if (file.FileType == ".gz")
+                                {
+                                    continue;
+                                }
+                                else
+                                {
+                                    tempFile = await file.CopyAsync(ApplicationData.Current.TemporaryFolder, file.Name, NameCollisionOption.ReplaceExisting);
+                                }
+
+                                // Change extension to ".log" for easy access.
+                                googleFilename = System.IO.Path.ChangeExtension(googleFilename, ".log");
+                                uploadedFile = await UploadAsync(googleDrive, new List<string> { googleSubfolder.Id }, tempFile, googleFilename);
+
+                                try
+                                {
+                                    if (tempFile != null)
+                                        await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                                    if (tempZipFile != null)
+                                        await tempZipFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                                }
+                                catch (System.IO.FileNotFoundException ioex)
+                                {
+                                    Debug.WriteLine(ioex.Message);
+                                    UpdateStatus(TraceLevel.Warning, string.Format("Delete temp failed\t{0} message {1}", file.Path, ioex.Message));
+                                }
+                            }
+
+                            // Don't delete files in log folder's root.
+                            if (uploadedFile != null && googlelogFolder.Name != localSubFolder.Name)
+                                filesToDelete.Add(file);
+                        }
+
+                        while (filesToDelete.Count > 0)
+                        {
+                            StorageFile file = null;
+                            try
+                            {
+                                file = filesToDelete.ElementAt(0);
+                                filesToDelete.RemoveAt(0);
+                                await file.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                            }
+                            catch (System.IO.FileNotFoundException ioex)
+                            {
+                                Debug.WriteLine(ioex.Message);
+                                UpdateStatus(TraceLevel.Warning, string.Format("Delete failed\t{0} message {1}", file.Path, ioex.Message));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex.Message);
+                UpdateStatus(TraceLevel.Error, string.Format("Sync failed\t{0} message {1}", localFolder.Path, ex.Message));
+            }
         }
 
         public async Task SyncGoogleDriveAsync(StorageFolder localFolder, string googleFolderId, DriveService googleDrive)
         {
             try
             {
-                IReadOnlyList<IStorageItem> localItems = await SortStorageItemsAsync(localFolder, SortOrder.DateModifiedAsc);
+                IReadOnlyList<IStorageItem> localItems = await SortStorageItemsAsync(localFolder, SortOrder.DateModifiedDesc);
                 totalFoundItem += localItems.Count;
                 // If folder contains nothing, delete itself
-                //if (localItems.Count <= 0 && !localFolder.Name.EndsWith("_BUILDS"))
-                //{
-                //    await localFolder.DeleteAsync();
-                //    UpdateStatus(TraceLevel.Warning, string.Format("Deleted\t{0}", localFolder.Path));
-                //    return;
-                //}
+                if (localItems.Count <= 0 && localFolder.Name.Contains("_LOGID"))
+                {
+                    await localFolder.DeleteAsync();
+                    UpdateStatus(TraceLevel.Warning, string.Format("Deleted\t{0}", localFolder.Path));
+                    return;
+                }
 
                 FileList googleItems = GoogleDriveItems(googleDrive, googleFolderId, SortOrder.NameAsc);
                 foreach (IStorageItem item in localItems)
@@ -172,13 +290,13 @@ namespace BuildBackup
 
                     if (item.IsOfType(StorageItemTypes.Folder))
                     {
-                        // If folder is build, but only contains 1 file (e.g. ISO, ZIP, EXE), simply go deeper
+                        // If folder is build, but only contains 1 file(e.g.ISO, ZIP, EXE), simply go deeper
                         IStorageItem setupFile = await (item as StorageFolder).TryGetItemAsync("setup.exe");
                         IStorageItem autorunFile = await (item as StorageFolder).TryGetItemAsync("autorun.exe");
                         IStorageItem issetupFile = await (item as StorageFolder).TryGetItemAsync("issetup.dll");
 
-                        //if (item.Name.Contains("_LOGID") && !(folderItems.Count == 1 && folderItems[0].IsOfType(StorageItemTypes.File)))
-                        if (setupFile != null || autorunFile != null || issetupFile != null)
+                        //if (setupFile != null || autorunFile != null || issetupFile != null)
+                        if (item.Name.Contains("_LOGID") || setupFile != null || autorunFile != null || issetupFile != null)
                         {
                             UpdateStatus(TraceLevel.Info, string.Format("Folder contains build\t{0}", item.Path));
                             // If folder is build, check if zip exist in Google Drive
@@ -282,19 +400,49 @@ namespace BuildBackup
             Debug.WriteLine(string.Format("[{0}][{1}] {2}\n", level.ToString().PadLeft(7), DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss.fff"), msg));
         }
 
+        private string GetLogSubfolderName(string itemName, int folderMaxCount)
+        {
+            string folderName = "0";
+            string pattern = "^(.\\d+)";
+
+            // Instantiate the regular expression object.
+            Regex r = new Regex(pattern, RegexOptions.IgnoreCase);
+
+            // Match the regular expression pattern against a text string.
+            Match m = r.Match(itemName);
+            if (m.Success)
+            {
+                folderName = Convert.ToString(Convert.ToInt64(m.Value) / folderMaxCount * folderMaxCount);
+            }
+            else
+            {
+                // branchinfo items start with product name
+                pattern = "^(.+)-(\\d+)";
+                Regex r2 = new Regex(pattern, RegexOptions.IgnoreCase);
+                Match m2 = r2.Match(itemName);
+                if (m2.Success)
+                    folderName = m2.Groups[1].Value;
+            }
+            return folderName;
+        }
+
         public async Task<File> GoogleDriveCreateFolderAsync(DriveService driveService, string parent, string itemName)
         {
             File googleFolder = null;
             try
             {
-                File folderMetadata = new File
+                googleFolder = GoogleDriveIsItemExist(driveService, parent, itemName, "application/vnd.google-apps.folder");
+                if (googleFolder == null)
                 {
-                    Name = itemName,
-                    MimeType = "application/vnd.google-apps.folder",
-                    Parents = new List<string> { parent }
-                };
-                FilesResource.CreateRequest requestUpload = driveService.Files.Create(folderMetadata);
-                googleFolder = await requestUpload.ExecuteAsync();
+                    File folderMetadata = new File
+                    {
+                        Name = itemName,
+                        MimeType = "application/vnd.google-apps.folder",
+                        Parents = new List<string> { parent }
+                    };
+                    FilesResource.CreateRequest requestUpload = driveService.Files.Create(folderMetadata);
+                    googleFolder = await requestUpload.ExecuteAsync();
+                }
             }
             catch (Exception ex)
             {
@@ -321,6 +469,7 @@ namespace BuildBackup
                     request.PageToken = nextPageToken;
                     FileList result = request.Execute();
                     files = files.Concat(result.Files);
+                    nextPageToken = result.NextPageToken;
                 } while (nextPageToken != null);
 
                 switch (order)
@@ -544,6 +693,19 @@ namespace BuildBackup
             }
         }
 
+        private async Task<IReadOnlyList<IStorageFolder>> GetAllSubfoldersAsync(StorageFolder localFolder)
+        {
+            List<StorageFolder> folders = new List<StorageFolder>();
+            folders.Add(localFolder);
+            IReadOnlyList<IStorageFolder> subfolders = await localFolder.GetFoldersAsync();
+            foreach (StorageFolder subfolder in subfolders)
+            {
+                List<StorageFolder> subfolders2 = (List < StorageFolder > )await GetAllSubfoldersAsync(subfolder);
+                folders.AddRange(subfolders2);
+            }
+
+            return folders;
+        }
         private async Task<IReadOnlyList<IStorageItem>> SortStorageItemsAsync(StorageFolder localFolder, SortOrder order)
         {            
             IReadOnlyList<IStorageItem> localItems = null;

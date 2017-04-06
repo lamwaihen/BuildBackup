@@ -41,6 +41,13 @@ namespace BuildBackup
         }
         private int _daysToDelete = 180;
 
+        public int FolderMaxItems
+        {
+            get { return _folderMaxItems; }
+            set { _folderMaxItems = value; OnPropertyChanged(); }
+        }
+        private int _folderMaxItems = 10000;
+
         public double FoundItemProgress
         {
             get { return _foundItemProgress; }
