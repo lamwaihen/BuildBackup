@@ -15,18 +15,27 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition/>
             </Grid.RowDefinitions>
-            <StackPanel Grid.Row="0" Orientation="Horizontal">
-                <TextBlock x:Name="textBlock1" HorizontalAlignment="Left" Margin="10" TextWrapping="Wrap" Text="Destination Folder:" VerticalAlignment="Top"/>
-                <ComboBox x:Name="comboBoxGoogleFolders" Margin="10" Height="32" SelectionChanged="comboBoxGoogleFolders_SelectionChanged"/>
-            </StackPanel>
+            <RelativePanel Grid.Row="0">                
+                <TextBlock x:Name="textBlockBackup" Margin="8" TextWrapping="WrapWholeWords" Text="Due to security reason, please click the following folder buttons to select corresponding source folder." VerticalAlignment="Top"/>
+                <StackPanel x:Name="gridBuild" Width="240" Margin="8" RelativePanel.Below="textBlockBackup" BorderBrush="{ThemeResource SystemControlBackgroundChromeMediumBrush}" Background="{ThemeResource SystemControlBackgroundChromeMediumLowBrush}" BorderThickness="2" Padding="4">
+                    <Button x:Name="buttonBackupBuild" Content="Build" Width="120" Margin="8" Click="buttonBackupBuild_Click"/>
+                    <TextBlock x:Name="textBlockSourceBuild" Text="Source: \\192.168.12.98\rd_builds$" FontSize="12"/>
+                    <TextBlock x:Name="textBlockMapsBuild" Text="Maps to: " FontSize="12"/>
+                </StackPanel>
+                <StackPanel x:Name="gridBuildLogs" Width="240" Margin="8" RelativePanel.Below="textBlockBackup" RelativePanel.RightOf="gridBuild" BorderBrush="{ThemeResource SystemControlBackgroundChromeMediumBrush}" Background="{ThemeResource SystemControlBackgroundChromeMediumLowBrush}" BorderThickness="2" Padding="4">
+                    <Button x:Name="buttonBackupBuildLogs" Content="Build Logs" Width="120" Margin="8" Click="buttonBackupBuildLogs_Click" RelativePanel.Below="textBlockBackup" RelativePanel.RightOf="buttonBackupBuild"/>
+                    <TextBlock x:Name="textBlockSourceBuildLogs" Text="Source: \\tpe-mbmaster\BMDepot$\VDrive" FontSize="12"/>
+                    <TextBlock x:Name="textBlockMapsBuildLogs" Text="Maps to: " FontSize="12"/>
+                </StackPanel>
+            </RelativePanel>
             <StackPanel Grid.Row="1" Orientation="Horizontal">
                 <CheckBox x:Name="checkBoxDeleteOldFiles" Margin="10" Content="Delete Files Older Than " IsChecked="{x:Bind Path=p.CanDeleteOldFiles, Mode=TwoWay}"/>
                 <TextBox x:Name="textBoxNumDays" Text="{x:Bind Path=p.DaysToDelete, Mode=TwoWay}" VerticalAlignment="Center"/>
                 <TextBlock x:Name="textBlock2" Margin="10" Text="Days" VerticalAlignment="Center"/>
             </StackPanel>
             <StackPanel Grid.Row="2" Orientation="Horizontal">
-                <Button x:Name="buttonStartBackup" Margin="10" Click="buttonStartBackup_Click" Content="Start Backup"/>
-                <Button x:Name="buttonCancelBackup" Margin="10" Click="buttonCancelBackup_Click" Content="Cancel"/>
+                <Button x:Name="buttonStartBackup" Margin="10" Click="buttonStartBackup_Click" Content="Start Backup" IsEnabled="False"/>
+                <Button x:Name="buttonCancelBackup" Margin="10" Click="buttonCancelBackup_Click" Content="Cancel" IsEnabled="False"/>
             </StackPanel>
             <Grid Grid.Row="3" Background="LightGray" VerticalAlignment="Bottom" Margin="20">
                 <Grid.ColumnDefinitions>

@@ -65,10 +65,10 @@ namespace BuildBackup
         static private int proceedFoundItem;
 
         ThreadPoolTimer m_timerFolderCheck = null;
-        IReadOnlyList<StorageFolder> m_folders;
+        //IReadOnlyList<StorageFolder> m_folders;
+        List<KeyValuePair<string, StorageFolder>> m_backupFolders = new List<KeyValuePair<string, StorageFolder>>();
 
         DriveService m_driveService = null;
-        string m_buildBackupFolderId;
         private Payload p;
 
         public MainPage()
@@ -100,25 +100,10 @@ namespace BuildBackup
             {
                 HttpClientInitializer = credential,
                 ApplicationName = "Corel Build Backup",
-            });
-
-            // Get all folders from Google Drive's root
-            FileList result = GoogleDriveItems(m_driveService, "root", SortOrder.NameAsc);
-            foreach (File item in result.Files)
-            {
-                if (item.MimeType != "application/vnd.google-apps.folder")
-                    continue;
-
-                ComboBoxItem cbItem = new ComboBoxItem { Content = item.Name, Name = item.Id, Tag = item.Id };
-                comboBoxGoogleFolders.Items.Add(cbItem);
-
-                // Initially selected Build_Backup
-                if (item.Name == "Build_Backup")
-                    comboBoxGoogleFolders.SelectedItem = cbItem;
-            }                    
+            });                 
         }
 
-        private async void FolderCheckTimerElpasedHandler(ThreadPoolTimer timer, StorageFolder rootFolder)
+        private async void FolderCheckTimerElpasedHandler(ThreadPoolTimer timer, List<KeyValuePair<string, StorageFolder>> backupFolders)
         {
             if (timer != null)
             {
@@ -128,10 +113,13 @@ namespace BuildBackup
 
             StorageFile logFile = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
 
-            if (m_buildBackupFolderId == "0B8j6UJY_E28CdGg5bXV2dGQtZzQ")
-                await SyncBuildLogsGoogleDriveAsync(rootFolder, m_buildBackupFolderId, m_driveService);
-            else
-                await SyncGoogleDriveAsync(rootFolder, m_buildBackupFolderId, m_driveService);
+            foreach (KeyValuePair<string, StorageFolder> backupFolder in backupFolders)
+            {
+                if (backupFolder.Key == "0B8j6UJY_E28CdGg5bXV2dGQtZzQ")
+                    await SyncBuildLogsGoogleDriveAsync(backupFolder.Value, backupFolder.Key, m_driveService);
+                else
+                    await SyncGoogleDriveAsync(backupFolder.Value, backupFolder.Key, m_driveService);
+            }
             totalFoundItem = proceedFoundItem = 0;
             p.ProcessingItemProgress = p.FoundItemProgress = 0;
 
@@ -143,8 +131,8 @@ namespace BuildBackup
                 });
             }
 
-            // Check again after 6 hours
-            m_timerFolderCheck = ThreadPoolTimer.CreateTimer((newTimer) => FolderCheckTimerElpasedHandler(newTimer, rootFolder), TimeSpan.FromHours(3));
+            // Check again after 3 hours
+            m_timerFolderCheck = ThreadPoolTimer.CreateTimer((newTimer) => FolderCheckTimerElpasedHandler(newTimer, backupFolders), TimeSpan.FromHours(3));
         }
 
         public async Task SyncBuildLogsGoogleDriveAsync(StorageFolder localFolder, string googleFolderId, DriveService googleDrive)
@@ -154,7 +142,7 @@ namespace BuildBackup
                 FileList googleItems = GoogleDriveItems(googleDrive, googleFolderId, SortOrder.NameAsc);
                 foreach (File googlelogFolder in googleItems.Files)
                 {
-                    if (googlelogFolder.Name != "branchinfo")
+                    if (googlelogFolder.Name != "config")
                         continue;
                     // First we find the matching local log folder
                     StorageFolder localLogFolder = await localFolder.GetFolderAsync(googlelogFolder.Name);
@@ -185,11 +173,17 @@ namespace BuildBackup
                                 googleFilename = file.DisplayName;
                             }
 
+                            // Change extension to ".log" for easy access.
+                            string ext = System.IO.Path.GetExtension(googleFilename);
+                            if (ext != ".log" && ext != ".txt")
+                                googleFilename = System.IO.Path.ChangeExtension(googleFilename, ".log");
+
                             string matchingFolderName = GetLogSubfolderName(file.Name, p.FolderMaxItems);
                             if (googleSubfolder == null || googleSubfolder.Name != matchingFolderName)
                             {
                                 googleSubfolder = await GoogleDriveCreateFolderAsync(googleDrive, googlelogFolder.Id, matchingFolderName);
                                 googleSubfolderItems = GoogleDriveItems(googleDrive, googleSubfolder.Id, SortOrder.NameAsc);
+                                UpdateStatus(TraceLevel.Info, string.Format("Get {0} items from associated Google Drive folder\t{1}", googleSubfolderItems.Files.Count, googleSubfolder.Name));
                             }
 
                             File uploadedFile = GoogleDriveIsItemExist(googleSubfolderItems, googleFilename, "text/plain");
@@ -200,25 +194,34 @@ namespace BuildBackup
 
                                 if (file.FileType == ".zip")
                                 {
+                                    // Unzip to retrieve the log file, it will be easier to view and search on Google Drive
+                                    UpdateStatus(TraceLevel.Info, string.Format("Unzipping\t{0}", file.Name));
                                     tempZipFile = await file.CopyAsync(ApplicationData.Current.TemporaryFolder, file.Name, NameCollisionOption.ReplaceExisting);
                                     ZipFile.ExtractToDirectory(tempZipFile.Path, ApplicationData.Current.TemporaryFolder.Path);
-                                    tempFile = await ApplicationData.Current.TemporaryFolder.GetFileAsync(googleFilename);
+                                    tempFile = await ApplicationData.Current.TemporaryFolder.GetFileAsync(file.DisplayName);
                                 }
                                 else if (file.FileType == ".gz")
                                 {
+                                    // ZipFile can't handle gz, skip
+                                    UpdateStatus(TraceLevel.Info, string.Format("Can't unzip .gz files\t{0}", file.Name));
                                     continue;
                                 }
                                 else
                                 {
+                                    UpdateStatus(TraceLevel.Info, string.Format("Raw text log\t{0}", file.Name));
                                     tempFile = await file.CopyAsync(ApplicationData.Current.TemporaryFolder, file.Name, NameCollisionOption.ReplaceExisting);
                                 }
 
-                                // Change extension to ".log" for easy access.
-                                googleFilename = System.IO.Path.ChangeExtension(googleFilename, ".log");
+                                // Upload file to Google Drive
                                 uploadedFile = await UploadAsync(googleDrive, new List<string> { googleSubfolder.Id }, tempFile, googleFilename);
+                                if (uploadedFile != null)
+                                    UpdateStatus(TraceLevel.Warning, string.Format("Uploaded\t{0} to https://drive.google.com/open?id={1}", tempFile.Path, uploadedFile.Id));
+                                else
+                                    UpdateStatus(TraceLevel.Error, string.Format("Upload failed\t{0}", tempFile.Path));
 
                                 try
                                 {
+                                    // Delete temp file and folder
                                     if (tempFile != null)
                                         await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                                     if (tempZipFile != null)
@@ -232,18 +235,32 @@ namespace BuildBackup
                             }
 
                             // Don't delete files in log folder's root.
-                            if (uploadedFile != null && googlelogFolder.Name != localSubFolder.Name)
-                                filesToDelete.Add(file);
+                            if (googlelogFolder.Name != localSubFolder.Name && uploadedFile != null && p.CanDeleteOldFiles == true)
+                            {
+                                // If build is too old (180days), delete it.
+                                if (DateTime.Now.Subtract(file.DateCreated.DateTime).Days > p.DaysToDelete)
+                                {                                    
+                                    filesToDelete.Add(file);
+                                    UpdateStatus(TraceLevel.Warning, string.Format("Deleted archived\t{0} created on {1}", file.Path, file.DateCreated.Date));
+                                }
+                            }
                         }
 
+                        UpdateStatus(TraceLevel.Info, string.Format("{0} files is going to delete.", filesToDelete.Count));
                         while (filesToDelete.Count > 0)
                         {
+                            if (_cancel)
+                            {
+                                UpdateStatus(TraceLevel.Info, "Backup cancelled");
+                                break;
+                            }
                             StorageFile file = null;
                             try
                             {
                                 file = filesToDelete.ElementAt(0);
                                 filesToDelete.RemoveAt(0);
                                 await file.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                                UpdateStatus(TraceLevel.Warning, string.Format("Deleted permanently\t{0}", file.Path));
                             }
                             catch (System.IO.FileNotFoundException ioex)
                             {
@@ -323,8 +340,10 @@ namespace BuildBackup
                                 UpdateStatus(TraceLevel.Warning, string.Format("Uploaded\t{0} to https://drive.google.com/open?id={1}", zipPath, uploadedFile.Id));
 
                                 // Delete temp file and folder
-                                await tempFolder.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                                await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                                if (tempFolder != null)
+                                    await tempFolder.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                                if (tempFile != null)
+                                    await tempFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                             }
 
                             if (uploadedFile != null && p.CanDeleteOldFiles == true)
@@ -403,7 +422,7 @@ namespace BuildBackup
         private string GetLogSubfolderName(string itemName, int folderMaxCount)
         {
             string folderName = "0";
-            string pattern = "^(.\\d+)";
+            string pattern = "^(\\d+)";
 
             // Instantiate the regular expression object.
             Regex r = new Regex(pattern, RegexOptions.IgnoreCase);
@@ -442,6 +461,11 @@ namespace BuildBackup
                     };
                     FilesResource.CreateRequest requestUpload = driveService.Files.Create(folderMetadata);
                     googleFolder = await requestUpload.ExecuteAsync();
+                    UpdateStatus(TraceLevel.Info, string.Format("Folder created\t{0} at {1}", itemName, googleFolder.Id));
+                }
+                else
+                {
+                    UpdateStatus(TraceLevel.Info, string.Format("Folder found\t{0} at {1}", itemName, googleFolder.Id));
                 }
             }
             catch (Exception ex)
@@ -449,7 +473,6 @@ namespace BuildBackup
                 Debug.WriteLine(ex.Message);
                 UpdateStatus(TraceLevel.Error, string.Format("Folder create failed\t{0} parent {1} message {2}", itemName, parent, ex.Message));
             }
-            UpdateStatus(TraceLevel.Info, string.Format("Folder created\t{0} at {1}", itemName, googleFolder.Id));
             return googleFolder;
         }
 
@@ -666,7 +689,10 @@ namespace BuildBackup
                 request.Q += "name = '" + itemName.Replace("'", "\\'") + "'";
                 FileList result = request.Execute();
                 if (result.Files.Count > 0)
+                {
                     uploadedFile = result.Files[0];
+                    UpdateStatus(TraceLevel.Info, string.Format("File retrieved from Google\t{0}", uploadedFile.Name));
+                }
             }
             catch (Exception ex)
             {
@@ -760,31 +786,49 @@ namespace BuildBackup
             return localItems;
         }
 
-
-        private void comboBoxGoogleFolders_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            m_buildBackupFolderId = (comboBoxGoogleFolders.SelectedItem as ComboBoxItem).Tag.ToString();
-        }
-
-        private async void buttonStartBackup_Click(object sender, RoutedEventArgs e)
+        private void buttonStartBackup_Click(object sender, RoutedEventArgs e)
         {
             _cancel = false;
-            FolderPicker folderPicker = new FolderPicker();
-            folderPicker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
-            folderPicker.FileTypeFilter.Add("*");
-            StorageFolder folder = await folderPicker.PickSingleFolderAsync();
-            if (folder != null)
+            if (m_backupFolders.Count > 0)
             {
-                m_folders = await folder.GetFoldersAsync();
-
                 // Create a timer to periodically check the build folders
-                m_timerFolderCheck = ThreadPoolTimer.CreateTimer((timer) => FolderCheckTimerElpasedHandler(timer, folder), TimeSpan.FromMilliseconds(10));
+                m_timerFolderCheck = ThreadPoolTimer.CreateTimer((timer) => FolderCheckTimerElpasedHandler(timer, m_backupFolders), TimeSpan.FromMilliseconds(10));
+                buttonCancelBackup.IsEnabled = true;
             }
         }
 
         private void buttonCancelBackup_Click(object sender, RoutedEventArgs e)
         {
             _cancel = true;
+            buttonCancelBackup.IsEnabled = false;
+        }
+
+        private async void buttonBackupBuild_Click(object sender, RoutedEventArgs e)
+        {
+            FolderPicker folderPicker = new FolderPicker();
+            folderPicker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
+            folderPicker.FileTypeFilter.Add("*");
+            StorageFolder folder = await folderPicker.PickSingleFolderAsync();
+            if (folder != null)
+            {
+                m_backupFolders.Add(new KeyValuePair<string, StorageFolder>("0B8j6UJY_E28CfkpjUnJ0NGUxcFZmVHVTNkhXZFg2TmF1REpPc2E4WEQ4OVBsZVc1V1RlQjg", folder));
+                buttonStartBackup.IsEnabled = true;
+                textBlockMapsBuild.Text += folder.Path;
+            }
+        }
+
+        private async void buttonBackupBuildLogs_Click(object sender, RoutedEventArgs e)
+        {
+            FolderPicker folderPicker = new FolderPicker();
+            folderPicker.SuggestedStartLocation = PickerLocationId.ComputerFolder;
+            folderPicker.FileTypeFilter.Add("*");
+            StorageFolder folder = await folderPicker.PickSingleFolderAsync();
+            if (folder != null)
+            {
+                m_backupFolders.Add(new KeyValuePair<string, StorageFolder>("0B8j6UJY_E28CdGg5bXV2dGQtZzQ", folder));
+                buttonStartBackup.IsEnabled = true;
+                textBlockMapsBuildLogs.Text += folder.Path;
+            }
         }
     }
 }
