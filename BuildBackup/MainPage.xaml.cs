@@ -142,8 +142,8 @@ namespace BuildBackup
                 FileList googleItems = GoogleDriveItems(googleDrive, googleFolderId, SortOrder.NameAsc);
                 foreach (File googlelogFolder in googleItems.Files)
                 {
-                    if (googlelogFolder.Name != "config")
-                        continue;
+                    //if (googlelogFolder.Name != "log")
+                    //    continue;
                     // First we find the matching local log folder
                     StorageFolder localLogFolder = await localFolder.GetFolderAsync(googlelogFolder.Name);
                     // Proceed with subfolders first
