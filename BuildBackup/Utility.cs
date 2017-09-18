@@ -1,10 +1,12 @@
-﻿using System;
+﻿using Google.Apis.Drive.v3.Data;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using Windows.Storage;
 using Windows.UI.Core;
 
 namespace BuildBackup
@@ -68,6 +70,113 @@ namespace BuildBackup
             set { _canDeleteOldFiles = value; OnPropertyChanged(); }
         }
         private bool? _canDeleteOldFiles = true;
+
+        protected void OnPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChangedEventHandler eventHandler = PropertyChanged;
+            if (eventHandler != null)
+            {
+                Utility.UIThreadExecute(() => { eventHandler(this, new PropertyChangedEventArgs(propertyName)); });
+            }
+        }
+    }
+    public class SyncItem : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged = delegate { };
+
+        public IStorageItem BackupSource
+        {
+            get { return _backupSource; }
+            set
+            {
+                _backupSource = value;
+                if (_backupSource != null)
+                    _localPath = _backupSource.Path;
+                OnPropertyChanged();
+                OnPropertyChanged("LocapPath");
+            }
+        }
+        private IStorageItem _backupSource = null;
+
+        public File UploadDestination
+        {
+            get { return _uploadDestination; }
+            set
+            {
+                _uploadDestination = value;
+                _link = _uploadDestination != null ? string.Format("https://drive.google.com/open?id={0}", _uploadDestination.Id) : "";
+                OnPropertyChanged();
+                OnPropertyChanged("Link");
+            }
+        }
+        private File _uploadDestination = null;
+
+        public long Size
+        {
+            get { return _size; }
+            set { _size = value; OnPropertyChanged(); }
+        }
+        private long _size = 0;
+
+        public string Link
+        {
+            get { return _link; }
+        }
+        private string _link = "";
+
+
+        public string LocalPath
+        {
+            get { return _localPath; }
+        }
+        private string _localPath = "";
+
+
+        public string Status
+        {
+            get { return _status; }
+            set
+            {
+                _status += string.Format("[{0}] {1}\n", DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss.fff"), value);
+                OnPropertyChanged();
+            }
+        }
+        private string _status = "";
+
+        public long Received
+        {
+            get { return _received; }
+            set { _received = value; OnPropertyChanged(); }
+        }
+        private long _received = 0;
+
+        public long Sent
+        {
+            get { return _sent; }
+            set { _sent = value; OnPropertyChanged(); }
+        }
+        private long _sent = 0;
+
+        public double Progress
+        {
+            get { return _progress; }
+            set { _progress = value; OnPropertyChanged(); }
+        }
+        private double _progress = 0;
+
+        public string ParentFolderId
+        {
+            get { return _parentFolderId; }
+            set {_parentFolderId = value; OnPropertyChanged(); }
+        }
+        private string _parentFolderId = "";
+
+        public bool CanDeleteLocal
+        {
+            get { return _canDeleteLocal; }
+            set { _canDeleteLocal = value; OnPropertyChanged(); }
+        }
+        private bool _canDeleteLocal = true;
 
         protected void OnPropertyChanged([CallerMemberName] string propertyName = null)
         {

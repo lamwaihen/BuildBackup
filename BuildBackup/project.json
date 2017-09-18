@@ -2,7 +2,8 @@
   "dependencies": {
     "Google.Apis.Drive.v3": "1.17.0.644",
     "Microsoft.Bcl.Async": "1.0.168",
-    "Microsoft.NETCore.UniversalWindowsPlatform": "5.2.2",
+    "Microsoft.NETCore.UniversalWindowsPlatform": "5.2.3",
+    "System.IO.Compression.ZipFile": "4.3.0",
     "Zlib.Portable": "1.11.0"
   },
   "frameworks": {
