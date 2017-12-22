@@ -36,12 +36,33 @@ namespace BuildBackup
         }
         private string _log = "";
 
+        public int LoopInterval
+        {
+            get { return _loopInterval; }
+            set { _loopInterval = value;OnPropertyChanged(); }
+        }
+        private int _loopInterval = 5;
+
         public int DaysToDelete
         {
             get { return _daysToDelete; }
             set { _daysToDelete = value; OnPropertyChanged(); }
         }
         private int _daysToDelete = 180;
+
+        public int LatestLogID
+        {
+            get { return _latestLogID; }
+            set { _latestLogID = value; OnPropertyChanged(); }
+        }
+        private int _latestLogID = 0;
+
+        public string LastUpdateTime
+        {
+            get { return _lastUpdateTime; }
+            set { _lastUpdateTime = value; OnPropertyChanged(); }
+        }
+        private string _lastUpdateTime = DateTime.Now.ToString();
 
         public int FolderMaxItems
         {
@@ -71,6 +92,13 @@ namespace BuildBackup
         }
         private bool? _canDeleteOldFiles = true;
 
+        public StorageFolder TempFolder
+        {
+            get { return _tempFolder; }
+            set { _tempFolder = value; OnPropertyChanged(); }
+        }
+        private StorageFolder _tempFolder = null;
+
         protected void OnPropertyChanged([CallerMemberName] string propertyName = null)
         {
             PropertyChangedEventHandler eventHandler = PropertyChanged;
@@ -93,7 +121,7 @@ namespace BuildBackup
                 if (_backupSource != null)
                     _localPath = _backupSource.Path;
                 OnPropertyChanged();
-                OnPropertyChanged("LocapPath");
+                OnPropertyChanged("LocalPath");
             }
         }
         private IStorageItem _backupSource = null;
@@ -110,6 +138,23 @@ namespace BuildBackup
             }
         }
         private File _uploadDestination = null;
+
+        /// <summary>
+        /// Store the unzipped file for logs
+        /// </summary>
+        public IStorageItem ExtractedSource
+        {
+            get { return _extractedSource; }
+            set { _extractedSource = value; OnPropertyChanged(); }
+        }
+        private IStorageItem _extractedSource = null;
+
+        public string Name
+        {
+            get { return _name; }
+            set { _name = value; OnPropertyChanged(); }
+        }
+        private string _name = "";
 
         public long Size
         {
