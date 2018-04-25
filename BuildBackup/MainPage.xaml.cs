@@ -535,8 +535,12 @@ namespace BuildBackup
                         {
                             // Prepare item if valid
                             SyncItem syncItem = await @params.PrepareItemFunc(@params.LocalFolder.Key.Id, @params.GoogleDrive, @params.GoogleItems, storageItem, p);
-                            Utility.UIThreadExecute(() => { listSyncItems.Add(syncItem); });
-                            resultFolders.Add(syncItem);
+                            // Only items that will need to upload or delete should add to list.
+                            if (syncItem.UploadDestination == null || (p.CanDeleteOldFiles == true && syncItem.CanDeleteLocal == true && DateTime.Now.Subtract(storageItem.DateCreated.DateTime).Days > p.DaysToDelete))
+                            {
+                                Utility.UIThreadExecute(() => { listSyncItems.Add(syncItem); });
+                                resultFolders.Add(syncItem);
+                            }                            
                         }
                         else
                         {
@@ -881,7 +885,8 @@ namespace BuildBackup
                         string tempPath = ApplicationData.Current.TemporaryFolder.Path;
                         ZipFile.ExtractToDirectory(tempZipFile.Path, tempPath);
                         StorageFile extractedFile = await ApplicationData.Current.TemporaryFolder.GetFileAsync(file.DisplayName);
-                        await extractedFile.RenameAsync(googleFilename, NameCollisionOption.ReplaceExisting);
+                        if (extractedFile.Name != googleFilename)
+                            await extractedFile.RenameAsync(googleFilename, NameCollisionOption.ReplaceExisting);
                         syncItem.ExtractedSource = extractedFile;
                         await tempZipFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
                     }
