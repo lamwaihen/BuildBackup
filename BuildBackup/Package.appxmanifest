@@ -1,6 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" IgnorableNamespaces="uap mp">
-  <Identity Name="ee210495-3051-4003-bcfd-4b8af22e8ff9" Publisher="CN=Wayne.Lam" Version="1.0.13.0" />
+  <Identity Name="ee210495-3051-4003-bcfd-4b8af22e8ff9" Publisher="CN=wayne.lam" Version="1.1.21.0" />
   <mp:PhoneIdentity PhoneProductId="ee210495-3051-4003-bcfd-4b8af22e8ff9" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
   <Properties>
     <DisplayName>Corel Build Backup</DisplayName>

@@ -1936,6 +1936,24 @@ namespace BuildBackup
                 do
                 {
                     p.TempFolder = await folder.TryGetItemAsync("TempFolder") as StorageFolder;
+
+                    // Try to create a temp to verify if symbolic link is correct, which may change if certificate changed.
+                    try
+                    {
+                        IStorageFile items = await p.TempFolder.CreateFileAsync("Temp.txt");
+                    }
+                    catch (Exception)
+                    {
+                        var Msg = new Windows.UI.Popups.MessageDialog("Please verify symbolic link of the temp folder, make sure it's pointing to correct location.", "Invalid Temp Folder");
+                        await Msg.ShowAsync();
+                    }
+                    finally
+                    {
+                        IStorageItem tempItem = await p.TempFolder.TryGetItemAsync("Temp.txt");
+                        tempItem?.DeleteAsync();
+                        p.TempFolder = null;
+                    }
+                    
                     if (p.TempFolder == null)
                     {
                         textBoxMklink.Text = string.Format("mklink /D {0}\\TempFolder {1}", folder.Path, ApplicationData.Current.TemporaryFolder.Path);
